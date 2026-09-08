@@ -1,61 +1,20 @@
-name: Deploy GBot
+name: CI
 
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-    inputs:
-      bot_token:
-        description: 'Token do Bot (opcional)'
-        required: false
-        type: string
-      ambiente:
-        description: 'Ambiente de deploy'
-        required: true
-        default: 'production'
-        type: choice
-        options:
-          - production
-          - staging
-          - development
+on: push
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
       
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
+      - name: Usar o token
+        run: echo "Token: ${{ secrets.API_TOKEN }}"
+        # OU passar para o código:
+        # env:
+        #   API_TOKEN: ${{ secrets.API_TOKEN }}
       
-      - name: Create .env file
-        run: |
-          cat > .env << EOF
-          BOT_TOKEN=${{ secrets.BOT_TOKEN }}
-          GH_TOKEN=${{ secrets.GH_TOKEN }}
-          TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
-          AMBIENTE=${{ github.event.inputs.ambiente || 'production' }}
-          EOF
-      
-      - name: Inject tokens into code
-        run: |
-          # Substitui o token no código
-          sed -i "s/SEU_TOKEN_AQUI/${{ secrets.BOT_TOKEN }}/g" launcher.js
-          sed -i "s/SEU_TOKEN_AQUI/${{ secrets.BOT_TOKEN }}/g" gbot.js
-      
-      - name: Deploy
-        run: |
-          echo "Deploy realizado com sucesso!"
-          echo "Ambiente: ${{ github.event.inputs.ambiente || 'production' }}"
-      
-      - name: Notify Telegram
-        if: success()
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-          -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-          -d text="✅ Deploy concluído com sucesso!"
+      - name: Rodar script com o token
+        env:
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+        run: python meu_script.py
