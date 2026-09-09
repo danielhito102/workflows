@@ -1,20 +1,106 @@
-name: CI
+name: Deploy GBot
 
-on: push
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      ambiente:
+        description: 'Ambiente de deploy'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+          - development
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Usar o token
-        run: echo "Token: ${{ secrets.API_TOKEN }}"
-        # OU passar para o código:
-        # env:
-        #   API_TOKEN: ${{ secrets.API_TOKEN }}
-      
-      - name: Rodar script com o token
-        env:
-          API_TOKEN: ${{ secrets.API_TOKEN }}
-        run: python meu_script.py
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Create token_control.json with secret
+        run: |
+          cat > token_control.json << EOF
+          {
+            "token": "${{ secrets.GBOT_K }}",
+            "last_update": "$(date -Iseconds)",
+            "version": "1.0",
+            "ambiente": "${{ github.event.inputs.ambiente || 'production' }}"
+          }
+          EOF
+          echo "✅ token_control.json criado!"
+
+      - name: Inject token into admin.js (invisible)
+        run: |
+          # Cria um arquivo temporário com o token
+          echo "var GBOT_K = null;" > admin_temp.js
+          
+          # Adiciona o código que busca o token do GitHub
+          echo "function buscarTokenDoGitHub() {" >> admin_temp.js
+          echo "  try {" >> admin_temp.js
+          echo "    var url = 'https://raw.githubusercontent.com/${{ github.repository }}/main/token_control.json';" >> admin_temp.js
+          echo "    var conn = new java.net.URL(url).openConnection();" >> admin_temp.js
+          echo "    conn.setRequestMethod('GET');" >> admin_temp.js
+          echo "    conn.setConnectTimeout(10000);" >> admin_temp.js
+          echo "    conn.setReadTimeout(10000);" >> admin_temp.js
+          echo "    var reader = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream(), 'UTF-8'));" >> admin_temp.js
+          echo "    var sb = new java.lang.StringBuilder();" >> admin_temp.js
+          echo "    var line;" >> admin_temp.js
+          echo "    while ((line = reader.readLine()) != null) sb.append(line);" >> admin_temp.js
+          echo "    reader.close();" >> admin_temp.js
+          echo "    conn.disconnect();" >> admin_temp.js
+          echo "    var data = JSON.parse(sb.toString());" >> admin_temp.js
+          echo "    return data.token || null;" >> admin_temp.js
+          echo "  } catch (e) { return null; }" >> admin_temp.js
+          echo "}" >> admin_temp.js
+          
+          # Adiciona a função que obtém o token
+          echo "function getGitHubToken() {" >> admin_temp.js
+          echo "  if (typeof STATE !== 'undefined' && STATE.githubToken) return STATE.githubToken;" >> admin_temp.js
+          echo "  try {" >> admin_temp.js
+          echo "    var storage = storages.create('GBot_SecureToken');" >> admin_temp.js
+          echo "    var cached = storage.get('token');" >> admin_temp.js
+          echo "    var cacheTime = storage.get('token_time') || 0;" >> admin_temp.js
+          echo "    var age = new Date().getTime() - cacheTime;" >> admin_temp.js
+          echo "    if (cached && age < 86400000) {" >> admin_temp.js
+          echo "      STATE.githubToken = cached;" >> admin_temp.js
+          echo "      return cached;" >> admin_temp.js
+          echo "    }" >> admin_temp.js
+          echo "  } catch (e) {}" >> admin_temp.js
+          echo "  var token = buscarTokenDoGitHub();" >> admin_temp.js
+          echo "  if (token) {" >> admin_temp.js
+          echo "    try {" >> admin_temp.js
+          echo "      var storage = storages.create('GBot_SecureToken');" >> admin_temp.js
+          echo "      storage.put('token', token);" >> admin_temp.js
+          echo "      storage.put('token_time', new Date().getTime());" >> admin_temp.js
+          echo "    } catch (e) {}" >> admin_temp.js
+          echo "    STATE.githubToken = token;" >> admin_temp.js
+          echo "    return token;" >> admin_temp.js
+          echo "  }" >> admin_temp.js
+          echo "  return null;" >> admin_temp.js
+          echo "}" >> admin_temp.js
+          
+          # Concatena o código gerado com o admin.js original
+          cat admin.js >> admin_temp.js
+          mv admin_temp.js admin.js
+          echo "✅ Token injetado de forma invisível!"
+
+      - name: Commit and push updated files
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add admin.js token_control.json
+          git commit -m "Auto-deploy: token inject [skip ci]" || echo "No changes"
+          git push origin main
+          echo "✅ Arquivos atualizados!"
+
+      - name: Notify Telegram (success)
+        if: success()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+          -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+          -d text="✅ Deploy concluído! Ambiente: ${{ github.event.inputs.ambiente || 'production' }}"
